@@ -1,13 +1,286 @@
 <!doctype html>
 <html lang="nl">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Poppen Teller</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script async src="https://docs.opencv.org/4.x/opencv.js"></script>
-    <script type="module" src="/src/main.jsx"></script>
-  </body>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Poppen Teller</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f4f5f7;
+      color: #172033;
+    }
+    .page {
+      min-height: 100vh;
+      padding: 24px;
+      display: flex;
+      justify-content: center;
+    }
+    .card {
+      width: min(1100px, 100%);
+      background: white;
+      border-radius: 24px;
+      padding: 24px;
+      box-shadow: 0 12px 35px rgba(0,0,0,.08);
+    }
+    h1 { margin: 0 0 8px; font-size: 36px; }
+    .subtitle { margin: 0 0 20px; color: #5f697a; }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+    button, .fileButton {
+      border: 0;
+      border-radius: 14px;
+      padding: 12px 16px;
+      background: #172033;
+      color: white;
+      font-weight: 700;
+      cursor: pointer;
+      font-size: 15px;
+    }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    .fileButton input { display: none; }
+    .result {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 12px;
+      padding: 14px 18px;
+      border-radius: 18px;
+      background: #eef7ef;
+      margin-bottom: 18px;
+    }
+    .result strong { font-size: 42px; }
+    .label, .small, .note { color: #5f697a; }
+    .error { color: #a60000; font-weight: 700; }
+    canvas {
+      display: block;
+      width: 100%;
+      max-height: 75vh;
+      object-fit: contain;
+      border: 1px solid #e1e4e8;
+      border-radius: 18px;
+      background: #fafafa;
+    }
+    .note { font-size: 14px; }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="card">
+      <h1>Poppen Teller</h1>
+      <p class="subtitle">
+        Maak of kies een foto van poppen op wit papier. De app telt automatisch, zonder instellingen.
+      </p>
+
+      <div class="actions">
+        <label class="fileButton">
+          Foto kiezen / maken
+          <input id="fileInput" type="file" accept="image/*" capture="environment" />
+        </label>
+
+        <button id="analyseButton" disabled>Analyseer foto</button>
+        <button id="downloadButton" disabled>Download gemarkeerde foto</button>
+      </div>
+
+      <p id="error" class="error"></p>
+
+      <div id="result" class="result" style="display:none;">
+        <span class="label">Geschat totaal</span>
+        <strong id="count">0</strong>
+        <span id="small" class="small"></span>
+      </div>
+
+      <canvas id="canvas"></canvas>
+
+      <p class="note">
+        Groen = losse pop. Oranje = vermoedelijk hoopje/cluster, automatisch omgerekend naar meerdere poppen.
+      </p>
+    </section>
+  </main>
+
+  <script async src="https://docs.opencv.org/4.x/opencv.js"></script>
+
+  <script>
+    const fileInput = document.getElementById('fileInput');
+    const analyseButton = document.getElementById('analyseButton');
+    const downloadButton = document.getElementById('downloadButton');
+    const canvas = document.getElementById('canvas');
+    const errorEl = document.getElementById('error');
+    const resultEl = document.getElementById('result');
+    const countEl = document.getElementById('count');
+    const smallEl = document.getElementById('small');
+
+    let selectedFile = null;
+
+    function waitForOpenCV() {
+      return new Promise((resolve, reject) => {
+        const started = Date.now();
+        const timer = setInterval(() => {
+          if (window.cv && window.cv.Mat) {
+            clearInterval(timer);
+            resolve(window.cv);
+          }
+          if (Date.now() - started > 15000) {
+            clearInterval(timer);
+            reject(new Error('OpenCV kon niet geladen worden. Controleer je internetverbinding.'));
+          }
+        }, 100);
+      });
+    }
+
+    function loadImage(file) {
+      return new Promise(resolve => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.src = URL.createObjectURL(file);
+      });
+    }
+
+    function drawImageToCanvas(img, maxSize = 1600) {
+      const scale = Math.min(1, maxSize / Math.max(img.width, img.height));
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    }
+
+    function analyseCanvas(cv) {
+      const src = cv.imread(canvas);
+      const gray = new cv.Mat();
+      const blur = new cv.Mat();
+      const binary = new cv.Mat();
+      const contours = new cv.MatVector();
+      const hierarchy = new cv.Mat();
+
+      cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+      cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
+      cv.threshold(blur, binary, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
+
+      const kernelOpen = cv.Mat.ones(2, 2, cv.CV_8U);
+      const kernelClose = cv.Mat.ones(3, 3, cv.CV_8U);
+      cv.morphologyEx(binary, binary, cv.MORPH_OPEN, kernelOpen);
+      cv.morphologyEx(binary, binary, cv.MORPH_CLOSE, kernelClose);
+
+      cv.findContours(binary, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+      const ctx = canvas.getContext('2d');
+      ctx.lineWidth = 2;
+      ctx.font = '14px Arial';
+
+      let detections = [];
+      const canvasArea = canvas.width * canvas.height;
+      const minArea = Math.max(8, canvasArea * 0.000006);
+      const maxArea = canvasArea * 0.0025;
+
+      for (let i = 0; i < contours.size(); i++) {
+        const cnt = contours.get(i);
+        const area = cv.contourArea(cnt);
+
+        if (area < minArea || area > maxArea) {
+          cnt.delete();
+          continue;
+        }
+
+        const rect = cv.boundingRect(cnt);
+        const ratio = rect.width / Math.max(1, rect.height);
+
+        if (ratio > 3.8 || ratio < 0.25) {
+          cnt.delete();
+          continue;
+        }
+
+        const estimatedPieces = Math.max(1, Math.round(area / 95));
+
+        detections.push({
+          x: rect.x,
+          y: rect.y,
+          w: rect.width,
+          h: rect.height,
+          area,
+          count: estimatedPieces
+        });
+
+        cnt.delete();
+      }
+
+      detections.sort((a, b) => (a.y - b.y) || (a.x - b.x));
+
+      let total = 0;
+      detections.forEach(d => {
+        total += d.count;
+        ctx.strokeStyle = d.count > 1 ? '#ff7a00' : '#00a651';
+        ctx.fillStyle = d.count > 1 ? '#ff7a00' : '#00a651';
+        ctx.strokeRect(d.x, d.y, d.w, d.h);
+        if (d.count > 1) {
+          ctx.fillText(String(d.count), d.x, Math.max(14, d.y - 3));
+        }
+      });
+
+      src.delete();
+      gray.delete();
+      blur.delete();
+      binary.delete();
+      contours.delete();
+      hierarchy.delete();
+      kernelOpen.delete();
+      kernelClose.delete();
+
+      return { total, detections };
+    }
+
+    fileInput.addEventListener('change', async (event) => {
+      selectedFile = event.target.files && event.target.files[0];
+      if (!selectedFile) return;
+
+      errorEl.textContent = '';
+      resultEl.style.display = 'none';
+      downloadButton.disabled = true;
+
+      const img = await loadImage(selectedFile);
+      drawImageToCanvas(img);
+      analyseButton.disabled = false;
+    });
+
+    analyseButton.addEventListener('click', async () => {
+      if (!selectedFile) {
+        errorEl.textContent = 'Kies eerst een foto.';
+        return;
+      }
+
+      analyseButton.disabled = true;
+      analyseButton.textContent = 'Analyseren...';
+      errorEl.textContent = '';
+      resultEl.style.display = 'none';
+
+      try {
+        const cv = await waitForOpenCV();
+        const img = await loadImage(selectedFile);
+        drawImageToCanvas(img);
+        const result = analyseCanvas(cv);
+
+        countEl.textContent = result.total;
+        smallEl.textContent = result.detections.length + ' gedetecteerde objecten/clusters';
+        resultEl.style.display = 'inline-flex';
+        downloadButton.disabled = false;
+      } catch (err) {
+        errorEl.textContent = err.message || 'Analyse mislukt.';
+      } finally {
+        analyseButton.disabled = false;
+        analyseButton.textContent = 'Analyseer foto';
+      }
+    });
+
+    downloadButton.addEventListener('click', () => {
+      const link = document.createElement('a');
+      link.download = 'poppen-telling.png';
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    });
+  </script>
+</body>
 </html>

@@ -1,36 +1,25 @@
-# Poppen Teller Webapp
+# Poptest - uploadklare versie
 
-Een simpele webapp om poppen op wit papier automatisch te tellen.
+Deze versie heeft geen build-stap nodig.
 
-## Lokaal starten
+## Online zetten via GitHub Pages
 
-```bash
-npm install
-npm run dev
-```
+1. Ga naar je GitHub repository `poptest`.
+2. Upload `index.html` en `README.md` naar de hoofdmap van de repository.
+3. Ga naar **Settings > Pages**.
+4. Kies:
+   - Source: **Deploy from a branch**
+   - Branch: **main**
+   - Folder: **/root**
+5. Klik op Save.
 
-Open daarna de link die Vite toont.
+Daarna staat de app meestal op:
 
-## Op GitHub Pages zetten
-
-1. Maak een nieuwe GitHub repository, bijvoorbeeld `poppen-teller`.
-2. Upload deze bestanden.
-3. Run lokaal:
-
-```bash
-npm install
-npm run deploy
-```
-
-Of gebruik GitHub Pages via `Settings > Pages` en kies de juiste branch/folder.
+https://JOUW-GITHUB-NAAM.github.io/poptest/
 
 ## Gebruik
 
-1. Kies of maak een foto.
-2. Klik op **Analyseer foto**.
-3. De app telt donkere poppen op het witte papier.
-4. De gemarkeerde afbeelding toont de detecties.
-
-## Belangrijk
-
-Dit is versie 1. De app gebruikt automatische instellingen, maar hoopjes poppen kunnen nog onderschat worden.
+- Klik op **Foto kiezen / maken**
+- Kies of maak een foto
+- Klik op **Analyseer foto**
+- Bekijk het geschatte totaal
