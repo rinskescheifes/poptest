@@ -1,13 +1,17 @@
-# Poptest - snelle uploadklare versie
+# Poptest zonder OpenCV
 
-Deze versie is bedoeld voor grote foto’s. De app verkleint elke foto automatisch voordat de analyse start.
+Deze versie gebruikt geen externe OpenCV-library. Daardoor blijft hij niet hangen op "OpenCV laden".
 
 ## Uploaden
 
-Upload deze twee bestanden naar de hoofdmap van je GitHub repo `poptest`:
+Upload naar de hoofdmap van je GitHub repo `poptest`:
 
 - index.html
 - README.md
 
-GitHub Pages:
+Daarna GitHub Pages:
 Settings > Pages > Deploy from branch > main > /root > Save
+
+Doe daarna een harde refresh:
+- Windows: Ctrl + Shift + R
+- Mac: Cmd + Shift + R

@@ -74,7 +74,7 @@
     <section class="card">
       <h1>Poppen Teller</h1>
       <p class="subtitle">
-        Upload of maak een foto. De app verkleint de foto automatisch voor snelle analyse.
+        Upload of maak een foto. Deze versie gebruikt geen OpenCV en werkt volledig in de browser.
       </p>
 
       <div class="actions">
@@ -99,12 +99,10 @@
       <canvas id="canvas"></canvas>
 
       <p class="note">
-        Deze snelle versie analyseert maximaal 900 pixels aan de langste zijde. Dat voorkomt vastlopen bij grote telefoonfoto’s.
+        Groen = losse detectie. Oranje = vermoedelijk cluster/hoopje. Geen instellingen nodig.
       </p>
     </section>
   </main>
-
-  <script async src="https://docs.opencv.org/4.x/opencv.js"></script>
 
   <script>
     const fileInput = document.getElementById('fileInput');
@@ -123,26 +121,6 @@
       statusEl.textContent = text || '';
     }
 
-    function waitFrame() {
-      return new Promise(resolve => requestAnimationFrame(resolve));
-    }
-
-    function waitForOpenCV() {
-      return new Promise((resolve, reject) => {
-        const started = Date.now();
-        const timer = setInterval(() => {
-          if (window.cv && window.cv.Mat && window.cv.imread) {
-            clearInterval(timer);
-            resolve(window.cv);
-          }
-          if (Date.now() - started > 20000) {
-            clearInterval(timer);
-            reject(new Error('OpenCV kon niet geladen worden. Ververs de pagina en probeer opnieuw.'));
-          }
-        }, 100);
-      });
-    }
-
     function loadImage(file) {
       return new Promise((resolve, reject) => {
         const img = new Image();
@@ -159,91 +137,134 @@
       const ctx = canvas.getContext('2d', { willReadFrequently: true });
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      return scale;
     }
 
-    function analyseCanvas(cv) {
-      const src = cv.imread(canvas);
-      const gray = new cv.Mat();
-      const blur = new cv.Mat();
-      const binary = new cv.Mat();
-      const contours = new cv.MatVector();
-      const hierarchy = new cv.Mat();
+    function getDarkMask(imageData, width, height) {
+      const data = imageData.data;
+      const grays = new Uint8Array(width * height);
 
-      try {
-        cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-        cv.GaussianBlur(gray, blur, new cv.Size(3, 3), 0);
-        cv.threshold(blur, binary, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
-
-        const kernelOpen = cv.Mat.ones(2, 2, cv.CV_8U);
-        cv.morphologyEx(binary, binary, cv.MORPH_OPEN, kernelOpen);
-        kernelOpen.delete();
-
-        cv.findContours(binary, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-
-        const ctx = canvas.getContext('2d');
-        ctx.lineWidth = 2;
-        ctx.font = '14px Arial';
-
-        let detections = [];
-        const canvasArea = canvas.width * canvas.height;
-
-        // Strengere grenzen: minder ruis, sneller klaar.
-        const minArea = Math.max(6, canvasArea * 0.00001);
-        const maxArea = canvasArea * 0.003;
-
-        // Veiligheidslimiet: voorkomt vastlopen als er duizenden ruiscontouren zijn.
-        const maxContoursToCheck = Math.min(contours.size(), 5000);
-
-        for (let i = 0; i < maxContoursToCheck; i++) {
-          const cnt = contours.get(i);
-          const area = cv.contourArea(cnt);
-
-          if (area >= minArea && area <= maxArea) {
-            const rect = cv.boundingRect(cnt);
-            const ratio = rect.width / Math.max(1, rect.height);
-
-            // Lange lijnen, randjes en krassen negeren.
-            if (ratio <= 3.8 && ratio >= 0.25) {
-              // Schatting voor clusters. Aangepast op kleinere analyse-resolutie.
-              const estimatedPieces = Math.max(1, Math.round(area / 28));
-
-              detections.push({
-                x: rect.x,
-                y: rect.y,
-                w: rect.width,
-                h: rect.height,
-                area,
-                count: estimatedPieces
-              });
-            }
-          }
-
-          cnt.delete();
-        }
-
-        detections.sort((a, b) => (a.y - b.y) || (a.x - b.x));
-
-        let total = 0;
-        detections.forEach(d => {
-          total += d.count;
-          ctx.strokeStyle = d.count > 1 ? '#ff7a00' : '#00a651';
-          ctx.fillStyle = d.count > 1 ? '#ff7a00' : '#00a651';
-          ctx.strokeRect(d.x, d.y, d.w, d.h);
-          if (d.count > 1) {
-            ctx.fillText(String(d.count), d.x, Math.max(14, d.y - 3));
-          }
-        });
-
-        return { total, detections, checkedContours: maxContoursToCheck, allContours: contours.size() };
-      } finally {
-        src.delete();
-        gray.delete();
-        blur.delete();
-        binary.delete();
-        contours.delete();
-        hierarchy.delete();
+      let sum = 0;
+      for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+        const r = data[i], g = data[i + 1], b = data[i + 2];
+        const gray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+        grays[p] = gray;
+        sum += gray;
       }
+
+      const mean = sum / grays.length;
+
+      let variance = 0;
+      for (let i = 0; i < grays.length; i++) {
+        const diff = grays[i] - mean;
+        variance += diff * diff;
+      }
+      const std = Math.sqrt(variance / grays.length);
+
+      // Automatische drempel voor donkere objecten op wit papier.
+      // Lager = strenger. Hiermee worden potloodlijnen grotendeels genegeerd.
+      const threshold = Math.max(35, Math.min(125, mean - std * 0.85));
+
+      const mask = new Uint8Array(width * height);
+      for (let i = 0; i < grays.length; i++) {
+        mask[i] = grays[i] < threshold ? 1 : 0;
+      }
+
+      return { mask, threshold, mean, std };
+    }
+
+    function findComponents(mask, width, height) {
+      const visited = new Uint8Array(width * height);
+      const components = [];
+      const queue = new Int32Array(width * height);
+
+      for (let y = 1; y < height - 1; y++) {
+        for (let x = 1; x < width - 1; x++) {
+          const start = y * width + x;
+          if (!mask[start] || visited[start]) continue;
+
+          let head = 0;
+          let tail = 0;
+          queue[tail++] = start;
+          visited[start] = 1;
+
+          let minX = x, maxX = x, minY = y, maxY = y, area = 0;
+
+          while (head < tail) {
+            const idx = queue[head++];
+            area++;
+
+            const cy = Math.floor(idx / width);
+            const cx = idx - cy * width;
+
+            if (cx < minX) minX = cx;
+            if (cx > maxX) maxX = cx;
+            if (cy < minY) minY = cy;
+            if (cy > maxY) maxY = cy;
+
+            const n1 = idx - 1, n2 = idx + 1, n3 = idx - width, n4 = idx + width;
+            if (mask[n1] && !visited[n1]) { visited[n1] = 1; queue[tail++] = n1; }
+            if (mask[n2] && !visited[n2]) { visited[n2] = 1; queue[tail++] = n2; }
+            if (mask[n3] && !visited[n3]) { visited[n3] = 1; queue[tail++] = n3; }
+            if (mask[n4] && !visited[n4]) { visited[n4] = 1; queue[tail++] = n4; }
+          }
+
+          components.push({
+            x: minX,
+            y: minY,
+            w: maxX - minX + 1,
+            h: maxY - minY + 1,
+            area
+          });
+        }
+      }
+
+      return components;
+    }
+
+    function analyse() {
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      const width = canvas.width;
+      const height = canvas.height;
+      const imageData = ctx.getImageData(0, 0, width, height);
+
+      const { mask, threshold } = getDarkMask(imageData, width, height);
+      const components = findComponents(mask, width, height);
+
+      const canvasArea = width * height;
+      const minArea = Math.max(5, canvasArea * 0.000008);
+      const maxArea = canvasArea * 0.004;
+
+      const detections = [];
+
+      for (const c of components) {
+        if (c.area < minArea || c.area > maxArea) continue;
+
+        const ratio = c.w / Math.max(1, c.h);
+        if (ratio > 4.5 || ratio < 0.2) continue;
+
+        // Negeer heel dunne potloodlijnen.
+        const fill = c.area / Math.max(1, c.w * c.h);
+        if (fill < 0.12) continue;
+
+        const estimatedPieces = Math.max(1, Math.round(c.area / 24));
+        detections.push({ ...c, count: estimatedPieces });
+      }
+
+      detections.sort((a, b) => (a.y - b.y) || (a.x - b.x));
+
+      let total = 0;
+      for (const d of detections) {
+        total += d.count;
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = d.count > 1 ? '#ff7a00' : '#00a651';
+        ctx.fillStyle = d.count > 1 ? '#ff7a00' : '#00a651';
+        ctx.strokeRect(d.x, d.y, d.w, d.h);
+        if (d.count > 1) {
+          ctx.fillText(String(d.count), d.x, Math.max(14, d.y - 3));
+        }
+      }
+
+      return { total, detections, components: components.length, threshold };
     }
 
     fileInput.addEventListener('change', async (event) => {
@@ -258,9 +279,9 @@
 
       try {
         const img = await loadImage(selectedFile);
-        const scale = drawImageToCanvas(img, 900);
+        drawImageToCanvas(img, 900);
         analyseButton.disabled = false;
-        setStatus('Foto klaar. Origineel: ' + img.width + '×' + img.height + '. Analyseformaat: ' + canvas.width + '×' + canvas.height + '.');
+        setStatus('Foto klaar. Analyseformaat: ' + canvas.width + '×' + canvas.height + '.');
       } catch (err) {
         errorEl.textContent = err.message || 'Foto laden mislukt.';
         setStatus('');
@@ -279,30 +300,21 @@
       resultEl.style.display = 'none';
 
       try {
-        setStatus('OpenCV laden...');
-        const cv = await waitForOpenCV();
-        await waitFrame();
+        setStatus('Analyseren...');
+        await new Promise(resolve => setTimeout(resolve, 50));
 
-        setStatus('Foto opnieuw laden...');
         const img = await loadImage(selectedFile);
         drawImageToCanvas(img, 900);
-        await waitFrame();
 
-        setStatus('Poppen zoeken...');
         const started = performance.now();
-        const result = analyseCanvas(cv);
+        const result = analyse();
         const seconds = ((performance.now() - started) / 1000).toFixed(1);
 
         countEl.textContent = result.total;
-        smallEl.textContent = result.detections.length + ' objecten/clusters gevonden in ' + seconds + 's';
+        smallEl.textContent = result.detections.length + ' objecten/clusters in ' + seconds + 's';
         resultEl.style.display = 'inline-flex';
         downloadButton.disabled = false;
-
-        if (result.allContours >= 5000) {
-          setStatus('Analyse klaar. Let op: veel ruis gevonden; maak de foto liefst op egaal wit papier met goed licht.');
-        } else {
-          setStatus('Analyse klaar.');
-        }
+        setStatus('Analyse klaar. Drempelwaarde: ' + Math.round(result.threshold) + '.');
       } catch (err) {
         errorEl.textContent = err.message || 'Analyse mislukt.';
         setStatus('');
