@@ -1,8 +1,6 @@
-# Poptest zonder OpenCV
+# Poptest met papierkader
 
-Deze versie gebruikt geen externe OpenCV-library. Daardoor blijft hij niet hangen op "OpenCV laden".
-
-## Uploaden
+Deze versie zoekt eerst het witte papier en telt daarna alleen binnen dat kader.
 
 Upload naar de hoofdmap van je GitHub repo `poptest`:
 
@@ -12,6 +10,6 @@ Upload naar de hoofdmap van je GitHub repo `poptest`:
 Daarna GitHub Pages:
 Settings > Pages > Deploy from branch > main > /root > Save
 
-Doe daarna een harde refresh:
+Hard refresh na uploaden:
 - Windows: Ctrl + Shift + R
 - Mac: Cmd + Shift + R

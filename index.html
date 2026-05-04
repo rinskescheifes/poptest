@@ -74,7 +74,7 @@
     <section class="card">
       <h1>Poppen Teller</h1>
       <p class="subtitle">
-        Upload of maak een foto. Deze versie gebruikt geen OpenCV en werkt volledig in de browser.
+        De app zoekt eerst het witte papier en telt daarna alleen poppen binnen dat papier.
       </p>
 
       <div class="actions">
@@ -99,7 +99,7 @@
       <canvas id="canvas"></canvas>
 
       <p class="note">
-        Groen = losse detectie. Oranje = vermoedelijk cluster/hoopje. Geen instellingen nodig.
+        Blauw = gevonden papierkader. Groen = losse detectie. Oranje = vermoedelijk cluster/hoopje.
       </p>
     </section>
   </main>
@@ -130,7 +130,7 @@
       });
     }
 
-    function drawImageToCanvas(img, maxSize = 900) {
+    function drawImageToCanvas(img, maxSize = 1000) {
       const scale = Math.min(1, maxSize / Math.max(img.width, img.height));
       canvas.width = Math.max(1, Math.round(img.width * scale));
       canvas.height = Math.max(1, Math.round(img.height * scale));
@@ -139,46 +139,148 @@
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
     }
 
-    function getDarkMask(imageData, width, height) {
+    function rgbToGray(r, g, b) {
+      return Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+    }
+
+    function findPaperRect(imageData, width, height) {
       const data = imageData.data;
-      const grays = new Uint8Array(width * height);
+
+      // Zoek heldere, vrij neutrale pixels: waarschijnlijk wit papier.
+      const white = new Uint8Array(width * height);
+
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          const i = (y * width + x) * 4;
+          const r = data[i], g = data[i + 1], b = data[i + 2];
+          const max = Math.max(r, g, b);
+          const min = Math.min(r, g, b);
+          const gray = rgbToGray(r, g, b);
+
+          // Wit papier is licht en niet heel verzadigd.
+          if (gray > 145 && (max - min) < 65) {
+            white[y * width + x] = 1;
+          }
+        }
+      }
+
+      // Per rij/kolom bepalen hoeveel wit er zit.
+      const rowCounts = new Int32Array(height);
+      const colCounts = new Int32Array(width);
+
+      for (let y = 0; y < height; y++) {
+        let row = 0;
+        for (let x = 0; x < width; x++) {
+          if (white[y * width + x]) {
+            row++;
+            colCounts[x]++;
+          }
+        }
+        rowCounts[y] = row;
+      }
+
+      // Papier moet een groot aaneengesloten wit vlak zijn.
+      const minRowWhite = width * 0.18;
+      const minColWhite = height * 0.18;
+
+      let top = 0, bottom = height - 1, left = 0, right = width - 1;
+
+      for (let y = 0; y < height; y++) {
+        if (rowCounts[y] > minRowWhite) { top = y; break; }
+      }
+      for (let y = height - 1; y >= 0; y--) {
+        if (rowCounts[y] > minRowWhite) { bottom = y; break; }
+      }
+      for (let x = 0; x < width; x++) {
+        if (colCounts[x] > minColWhite) { left = x; break; }
+      }
+      for (let x = width - 1; x >= 0; x--) {
+        if (colCounts[x] > minColWhite) { right = x; break; }
+      }
+
+      // Als detectie onwaarschijnlijk is, val terug op bijna hele beeld.
+      const rectW = right - left + 1;
+      const rectH = bottom - top + 1;
+      const rectArea = rectW * rectH;
+      const imageArea = width * height;
+
+      if (rectW < width * 0.25 || rectH < height * 0.25 || rectArea < imageArea * 0.15) {
+        return {
+          x: Math.round(width * 0.03),
+          y: Math.round(height * 0.03),
+          w: Math.round(width * 0.94),
+          h: Math.round(height * 0.94),
+          fallback: true
+        };
+      }
+
+      // Iets naar binnen halen zodat rand/tafel buiten papier niet meetelt.
+      const padX = Math.max(3, Math.round(rectW * 0.015));
+      const padY = Math.max(3, Math.round(rectH * 0.015));
+
+      left = Math.min(width - 1, left + padX);
+      right = Math.max(0, right - padX);
+      top = Math.min(height - 1, top + padY);
+      bottom = Math.max(0, bottom - padY);
+
+      return {
+        x: left,
+        y: top,
+        w: right - left + 1,
+        h: bottom - top + 1,
+        fallback: false
+      };
+    }
+
+    function getDarkMaskInsidePaper(imageData, width, height, paper) {
+      const data = imageData.data;
+      const grays = [];
+
+      for (let y = paper.y; y < paper.y + paper.h; y++) {
+        for (let x = paper.x; x < paper.x + paper.w; x++) {
+          const i = (y * width + x) * 4;
+          const gray = rgbToGray(data[i], data[i + 1], data[i + 2]);
+          grays.push(gray);
+        }
+      }
 
       let sum = 0;
-      for (let i = 0, p = 0; i < data.length; i += 4, p++) {
-        const r = data[i], g = data[i + 1], b = data[i + 2];
-        const gray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
-        grays[p] = gray;
-        sum += gray;
-      }
-
-      const mean = sum / grays.length;
+      for (const g of grays) sum += g;
+      const mean = sum / Math.max(1, grays.length);
 
       let variance = 0;
-      for (let i = 0; i < grays.length; i++) {
-        const diff = grays[i] - mean;
+      for (const g of grays) {
+        const diff = g - mean;
         variance += diff * diff;
       }
-      const std = Math.sqrt(variance / grays.length);
+      const std = Math.sqrt(variance / Math.max(1, grays.length));
 
-      // Automatische drempel voor donkere objecten op wit papier.
-      // Lager = strenger. Hiermee worden potloodlijnen grotendeels genegeerd.
-      const threshold = Math.max(35, Math.min(125, mean - std * 0.85));
-
+      const threshold = Math.max(35, Math.min(125, mean - std * 0.9));
       const mask = new Uint8Array(width * height);
-      for (let i = 0; i < grays.length; i++) {
-        mask[i] = grays[i] < threshold ? 1 : 0;
+
+      for (let y = paper.y; y < paper.y + paper.h; y++) {
+        for (let x = paper.x; x < paper.x + paper.w; x++) {
+          const i = (y * width + x) * 4;
+          const gray = rgbToGray(data[i], data[i + 1], data[i + 2]);
+          mask[y * width + x] = gray < threshold ? 1 : 0;
+        }
       }
 
       return { mask, threshold, mean, std };
     }
 
-    function findComponents(mask, width, height) {
+    function findComponents(mask, width, height, paper) {
       const visited = new Uint8Array(width * height);
       const components = [];
       const queue = new Int32Array(width * height);
 
-      for (let y = 1; y < height - 1; y++) {
-        for (let x = 1; x < width - 1; x++) {
+      const xStart = Math.max(1, paper.x);
+      const yStart = Math.max(1, paper.y);
+      const xEnd = Math.min(width - 2, paper.x + paper.w - 1);
+      const yEnd = Math.min(height - 2, paper.y + paper.h - 1);
+
+      for (let y = yStart; y <= yEnd; y++) {
+        for (let x = xStart; x <= xEnd; x++) {
           const start = y * width + x;
           if (!mask[start] || visited[start]) continue;
 
@@ -201,11 +303,21 @@
             if (cy < minY) minY = cy;
             if (cy > maxY) maxY = cy;
 
-            const n1 = idx - 1, n2 = idx + 1, n3 = idx - width, n4 = idx + width;
-            if (mask[n1] && !visited[n1]) { visited[n1] = 1; queue[tail++] = n1; }
-            if (mask[n2] && !visited[n2]) { visited[n2] = 1; queue[tail++] = n2; }
-            if (mask[n3] && !visited[n3]) { visited[n3] = 1; queue[tail++] = n3; }
-            if (mask[n4] && !visited[n4]) { visited[n4] = 1; queue[tail++] = n4; }
+            const neighbors = [idx - 1, idx + 1, idx - width, idx + width];
+
+            for (const n of neighbors) {
+              const ny = Math.floor(n / width);
+              const nx = n - ny * width;
+
+              if (
+                nx >= xStart && nx <= xEnd &&
+                ny >= yStart && ny <= yEnd &&
+                mask[n] && !visited[n]
+              ) {
+                visited[n] = 1;
+                queue[tail++] = n;
+              }
+            }
           }
 
           components.push({
@@ -227,12 +339,13 @@
       const height = canvas.height;
       const imageData = ctx.getImageData(0, 0, width, height);
 
-      const { mask, threshold } = getDarkMask(imageData, width, height);
-      const components = findComponents(mask, width, height);
+      const paper = findPaperRect(imageData, width, height);
+      const { mask, threshold } = getDarkMaskInsidePaper(imageData, width, height, paper);
+      const components = findComponents(mask, width, height, paper);
 
-      const canvasArea = width * height;
-      const minArea = Math.max(5, canvasArea * 0.000008);
-      const maxArea = canvasArea * 0.004;
+      const paperArea = paper.w * paper.h;
+      const minArea = Math.max(5, paperArea * 0.00001);
+      const maxArea = paperArea * 0.005;
 
       const detections = [];
 
@@ -242,7 +355,6 @@
         const ratio = c.w / Math.max(1, c.h);
         if (ratio > 4.5 || ratio < 0.2) continue;
 
-        // Negeer heel dunne potloodlijnen.
         const fill = c.area / Math.max(1, c.w * c.h);
         if (fill < 0.12) continue;
 
@@ -251,6 +363,11 @@
       }
 
       detections.sort((a, b) => (a.y - b.y) || (a.x - b.x));
+
+      // Papierkader tekenen.
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = '#1a73e8';
+      ctx.strokeRect(paper.x, paper.y, paper.w, paper.h);
 
       let total = 0;
       for (const d of detections) {
@@ -264,7 +381,7 @@
         }
       }
 
-      return { total, detections, components: components.length, threshold };
+      return { total, detections, components: components.length, threshold, paper };
     }
 
     fileInput.addEventListener('change', async (event) => {
@@ -279,7 +396,7 @@
 
       try {
         const img = await loadImage(selectedFile);
-        drawImageToCanvas(img, 900);
+        drawImageToCanvas(img, 1000);
         analyseButton.disabled = false;
         setStatus('Foto klaar. Analyseformaat: ' + canvas.width + '×' + canvas.height + '.');
       } catch (err) {
@@ -300,11 +417,11 @@
       resultEl.style.display = 'none';
 
       try {
-        setStatus('Analyseren...');
+        setStatus('Papier zoeken en poppen tellen...');
         await new Promise(resolve => setTimeout(resolve, 50));
 
         const img = await loadImage(selectedFile);
-        drawImageToCanvas(img, 900);
+        drawImageToCanvas(img, 1000);
 
         const started = performance.now();
         const result = analyse();
@@ -314,7 +431,12 @@
         smallEl.textContent = result.detections.length + ' objecten/clusters in ' + seconds + 's';
         resultEl.style.display = 'inline-flex';
         downloadButton.disabled = false;
-        setStatus('Analyse klaar. Drempelwaarde: ' + Math.round(result.threshold) + '.');
+
+        if (result.paper.fallback) {
+          setStatus('Analyse klaar. Let op: papierkader was onzeker, daarom is bijna de hele foto gebruikt.');
+        } else {
+          setStatus('Analyse klaar. Papierkader gevonden: ' + result.paper.w + '×' + result.paper.h + '.');
+        }
       } catch (err) {
         errorEl.textContent = err.message || 'Analyse mislukt.';
         setStatus('');
