@@ -1,8 +1,8 @@
-# Poptest met papier-vierhoek
+# Poptest met echte randdetectie
 
-Deze versie zoekt het witte papier als vierhoek, zodat schuine foto's beter werken.
+Deze versie zoekt per zijde naar de beste rechte papierkant. Daardoor mag het papier scheef staan of als trapezium in beeld komen.
 
-Upload naar de hoofdmap van je GitHub repo `poptest`:
+Upload naar de hoofdmap van repo `poptest`:
 
 - index.html
 - README.md
