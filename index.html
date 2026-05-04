@@ -74,7 +74,7 @@
     <section class="card">
       <h1>Poppen Teller</h1>
       <p class="subtitle">
-        De app zoekt eerst het witte papier en telt daarna alleen poppen binnen dat papier.
+        De app zoekt het witte papier als vierhoek en telt alleen binnen die vierhoek.
       </p>
 
       <div class="actions">
@@ -99,7 +99,7 @@
       <canvas id="canvas"></canvas>
 
       <p class="note">
-        Blauw = gevonden papierkader. Groen = losse detectie. Oranje = vermoedelijk cluster/hoopje.
+        Blauw = gevonden papier-vierhoek. Groen = losse detectie. Oranje = vermoedelijk cluster/hoopje.
       </p>
     </section>
   </main>
@@ -143,191 +143,290 @@
       return Math.round(0.299 * r + 0.587 * g + 0.114 * b);
     }
 
-    function findPaperRect(imageData, width, height) {
+    function isWhitePaperPixel(data, idx) {
+      const r = data[idx], g = data[idx + 1], b = data[idx + 2];
+      const max = Math.max(r, g, b);
+      const min = Math.min(r, g, b);
+      const gray = rgbToGray(r, g, b);
+
+      // Licht, relatief neutraal, dus waarschijnlijk papier.
+      return gray > 145 && (max - min) < 70;
+    }
+
+    function pointInPolygon(x, y, poly) {
+      let inside = false;
+      for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        const xi = poly[i].x, yi = poly[i].y;
+        const xj = poly[j].x, yj = poly[j].y;
+        const intersect = ((yi > y) !== (yj > y)) &&
+          (x < (xj - xi) * (y - yi) / ((yj - yi) || 0.000001) + xi);
+        if (intersect) inside = !inside;
+      }
+      return inside;
+    }
+
+    function makeInsideMask(width, height, poly) {
+      const mask = new Uint8Array(width * height);
+      const minX = Math.max(0, Math.floor(Math.min(...poly.map(p => p.x))));
+      const maxX = Math.min(width - 1, Math.ceil(Math.max(...poly.map(p => p.x))));
+      const minY = Math.max(0, Math.floor(Math.min(...poly.map(p => p.y))));
+      const maxY = Math.min(height - 1, Math.ceil(Math.max(...poly.map(p => p.y))));
+
+      for (let y = minY; y <= maxY; y++) {
+        for (let x = minX; x <= maxX; x++) {
+          if (pointInPolygon(x, y, poly)) mask[y * width + x] = 1;
+        }
+      }
+      return mask;
+    }
+
+    function findPaperQuad(imageData, width, height) {
       const data = imageData.data;
 
-      // Zoek heldere, vrij neutrale pixels: waarschijnlijk wit papier.
-      const white = new Uint8Array(width * height);
+      // We scannen per richting waar de eerste duidelijke papierpixels zitten.
+      // Daardoor ontstaat een vierhoek in plaats van een simpele rechthoek.
+      const rowLeft = [];
+      const rowRight = [];
+      const colTop = [];
+      const colBottom = [];
 
-      for (let y = 0; y < height; y++) {
+      const rowStep = Math.max(2, Math.round(height / 160));
+      const colStep = Math.max(2, Math.round(width / 160));
+
+      for (let y = 0; y < height; y += rowStep) {
+        let left = null, right = null;
         for (let x = 0; x < width; x++) {
-          const i = (y * width + x) * 4;
-          const r = data[i], g = data[i + 1], b = data[i + 2];
-          const max = Math.max(r, g, b);
-          const min = Math.min(r, g, b);
-          const gray = rgbToGray(r, g, b);
-
-          // Wit papier is licht en niet heel verzadigd.
-          if (gray > 145 && (max - min) < 65) {
-            white[y * width + x] = 1;
-          }
+          if (isWhitePaperPixel(data, (y * width + x) * 4)) { left = x; break; }
+        }
+        for (let x = width - 1; x >= 0; x--) {
+          if (isWhitePaperPixel(data, (y * width + x) * 4)) { right = x; break; }
+        }
+        if (left !== null && right !== null && right - left > width * 0.20) {
+          rowLeft.push({x: left, y});
+          rowRight.push({x: right, y});
         }
       }
 
-      // Per rij/kolom bepalen hoeveel wit er zit.
-      const rowCounts = new Int32Array(height);
-      const colCounts = new Int32Array(width);
-
-      for (let y = 0; y < height; y++) {
-        let row = 0;
-        for (let x = 0; x < width; x++) {
-          if (white[y * width + x]) {
-            row++;
-            colCounts[x]++;
-          }
+      for (let x = 0; x < width; x += colStep) {
+        let top = null, bottom = null;
+        for (let y = 0; y < height; y++) {
+          if (isWhitePaperPixel(data, (y * width + x) * 4)) { top = y; break; }
         }
-        rowCounts[y] = row;
+        for (let y = height - 1; y >= 0; y--) {
+          if (isWhitePaperPixel(data, (y * width + x) * 4)) { bottom = y; break; }
+        }
+        if (top !== null && bottom !== null && bottom - top > height * 0.20) {
+          colTop.push({x, y: top});
+          colBottom.push({x, y: bottom});
+        }
       }
 
-      // Papier moet een groot aaneengesloten wit vlak zijn.
-      const minRowWhite = width * 0.18;
-      const minColWhite = height * 0.18;
-
-      let top = 0, bottom = height - 1, left = 0, right = width - 1;
-
-      for (let y = 0; y < height; y++) {
-        if (rowCounts[y] > minRowWhite) { top = y; break; }
-      }
-      for (let y = height - 1; y >= 0; y--) {
-        if (rowCounts[y] > minRowWhite) { bottom = y; break; }
-      }
-      for (let x = 0; x < width; x++) {
-        if (colCounts[x] > minColWhite) { left = x; break; }
-      }
-      for (let x = width - 1; x >= 0; x--) {
-        if (colCounts[x] > minColWhite) { right = x; break; }
+      function quantile(values, q) {
+        if (!values.length) return 0;
+        const sorted = [...values].sort((a, b) => a - b);
+        return sorted[Math.max(0, Math.min(sorted.length - 1, Math.floor(q * (sorted.length - 1))))];
       }
 
-      // Als detectie onwaarschijnlijk is, val terug op bijna hele beeld.
-      const rectW = right - left + 1;
-      const rectH = bottom - top + 1;
-      const rectArea = rectW * rectH;
-      const imageArea = width * height;
+      function filterByQuantile(points, key, lowQ, highQ) {
+        const vals = points.map(p => p[key]);
+        const low = quantile(vals, lowQ);
+        const high = quantile(vals, highQ);
+        return points.filter(p => p[key] >= low && p[key] <= high);
+      }
 
-      if (rectW < width * 0.25 || rectH < height * 0.25 || rectArea < imageArea * 0.15) {
+      function fitLine(points) {
+        // Least-squares lijn: ax + by + c = 0
+        // Als x weinig varieert: x = constant; anders y = mx + b.
+        if (points.length < 2) return null;
+
+        const xs = points.map(p => p.x);
+        const ys = points.map(p => p.y);
+        const minX = Math.min(...xs), maxX = Math.max(...xs);
+        const minY = Math.min(...ys), maxY = Math.max(...ys);
+
+        if ((maxX - minX) < (maxY - minY)) {
+          // x = m*y + b
+          let sumY = 0, sumX = 0, sumYY = 0, sumYX = 0;
+          for (const p of points) {
+            sumY += p.y; sumX += p.x; sumYY += p.y * p.y; sumYX += p.y * p.x;
+          }
+          const n = points.length;
+          const denom = n * sumYY - sumY * sumY || 1;
+          const m = (n * sumYX - sumY * sumX) / denom;
+          const b = (sumX - m * sumY) / n;
+          // x - m*y - b = 0
+          return {a: 1, b: -m, c: -b};
+        } else {
+          // y = m*x + b
+          let sumX = 0, sumY = 0, sumXX = 0, sumXY = 0;
+          for (const p of points) {
+            sumX += p.x; sumY += p.y; sumXX += p.x * p.x; sumXY += p.x * p.y;
+          }
+          const n = points.length;
+          const denom = n * sumXX - sumX * sumX || 1;
+          const m = (n * sumXY - sumX * sumY) / denom;
+          const b = (sumY - m * sumX) / n;
+          // m*x - y + b = 0
+          return {a: m, b: -1, c: b};
+        }
+      }
+
+      function intersect(l1, l2) {
+        const d = l1.a * l2.b - l2.a * l1.b;
+        if (Math.abs(d) < 0.00001) return {x: 0, y: 0};
         return {
-          x: Math.round(width * 0.03),
-          y: Math.round(height * 0.03),
-          w: Math.round(width * 0.94),
-          h: Math.round(height * 0.94),
+          x: (l1.b * l2.c - l2.b * l1.c) / d,
+          y: (l1.c * l2.a - l2.c * l1.a) / d
+        };
+      }
+
+      function clampPoint(p) {
+        return {
+          x: Math.max(0, Math.min(width - 1, p.x)),
+          y: Math.max(0, Math.min(height - 1, p.y))
+        };
+      }
+
+      // Pak alleen betrouwbare randpunten, niet losse witte objecten buiten het papier.
+      const leftPts = filterByQuantile(rowLeft, "x", 0.03, 0.55);
+      const rightPts = filterByQuantile(rowRight, "x", 0.45, 0.97);
+      const topPts = filterByQuantile(colTop, "y", 0.03, 0.55);
+      const bottomPts = filterByQuantile(colBottom, "y", 0.45, 0.97);
+
+      const leftLine = fitLine(leftPts);
+      const rightLine = fitLine(rightPts);
+      const topLine = fitLine(topPts);
+      const bottomLine = fitLine(bottomPts);
+
+      if (!leftLine || !rightLine || !topLine || !bottomLine) {
+        return {
+          poly: [
+            {x: width * 0.03, y: height * 0.03},
+            {x: width * 0.97, y: height * 0.03},
+            {x: width * 0.97, y: height * 0.97},
+            {x: width * 0.03, y: height * 0.97}
+          ],
           fallback: true
         };
       }
 
-      // Iets naar binnen halen zodat rand/tafel buiten papier niet meetelt.
-      const padX = Math.max(3, Math.round(rectW * 0.015));
-      const padY = Math.max(3, Math.round(rectH * 0.015));
+      let poly = [
+        clampPoint(intersect(leftLine, topLine)),
+        clampPoint(intersect(rightLine, topLine)),
+        clampPoint(intersect(rightLine, bottomLine)),
+        clampPoint(intersect(leftLine, bottomLine))
+      ];
 
-      left = Math.min(width - 1, left + padX);
-      right = Math.max(0, right - padX);
-      top = Math.min(height - 1, top + padY);
-      bottom = Math.max(0, bottom - padY);
+      // Iets naar binnen trekken zodat randen/tafel niet meetellen.
+      const cx = poly.reduce((s, p) => s + p.x, 0) / 4;
+      const cy = poly.reduce((s, p) => s + p.y, 0) / 4;
+      poly = poly.map(p => ({
+        x: cx + (p.x - cx) * 0.985,
+        y: cy + (p.y - cy) * 0.985
+      }));
 
-      return {
-        x: left,
-        y: top,
-        w: right - left + 1,
-        h: bottom - top + 1,
-        fallback: false
-      };
+      const area = Math.abs(
+        poly.reduce((sum, p, i) => {
+          const q = poly[(i + 1) % poly.length];
+          return sum + p.x * q.y - q.x * p.y;
+        }, 0) / 2
+      );
+
+      const fallback = area < width * height * 0.12;
+
+      if (fallback) {
+        poly = [
+          {x: width * 0.03, y: height * 0.03},
+          {x: width * 0.97, y: height * 0.03},
+          {x: width * 0.97, y: height * 0.97},
+          {x: width * 0.03, y: height * 0.97}
+        ];
+      }
+
+      return {poly, fallback};
     }
 
-    function getDarkMaskInsidePaper(imageData, width, height, paper) {
+    function getDarkMaskInsidePaper(imageData, width, height, insideMask) {
       const data = imageData.data;
-      const grays = [];
+      let sum = 0;
+      let count = 0;
+      const grays = new Uint8Array(width * height);
 
-      for (let y = paper.y; y < paper.y + paper.h; y++) {
-        for (let x = paper.x; x < paper.x + paper.w; x++) {
-          const i = (y * width + x) * 4;
-          const gray = rgbToGray(data[i], data[i + 1], data[i + 2]);
-          grays.push(gray);
-        }
+      for (let p = 0; p < width * height; p++) {
+        if (!insideMask[p]) continue;
+        const i = p * 4;
+        const gray = rgbToGray(data[i], data[i + 1], data[i + 2]);
+        grays[p] = gray;
+        sum += gray;
+        count++;
       }
 
-      let sum = 0;
-      for (const g of grays) sum += g;
-      const mean = sum / Math.max(1, grays.length);
+      const mean = sum / Math.max(1, count);
 
       let variance = 0;
-      for (const g of grays) {
-        const diff = g - mean;
+      for (let p = 0; p < width * height; p++) {
+        if (!insideMask[p]) continue;
+        const diff = grays[p] - mean;
         variance += diff * diff;
       }
-      const std = Math.sqrt(variance / Math.max(1, grays.length));
 
+      const std = Math.sqrt(variance / Math.max(1, count));
       const threshold = Math.max(35, Math.min(125, mean - std * 0.9));
       const mask = new Uint8Array(width * height);
 
-      for (let y = paper.y; y < paper.y + paper.h; y++) {
-        for (let x = paper.x; x < paper.x + paper.w; x++) {
-          const i = (y * width + x) * 4;
-          const gray = rgbToGray(data[i], data[i + 1], data[i + 2]);
-          mask[y * width + x] = gray < threshold ? 1 : 0;
-        }
+      for (let p = 0; p < width * height; p++) {
+        if (!insideMask[p]) continue;
+        mask[p] = grays[p] < threshold ? 1 : 0;
       }
 
-      return { mask, threshold, mean, std };
+      return { mask, threshold, paperPixelCount: count };
     }
 
-    function findComponents(mask, width, height, paper) {
+    function findComponents(mask, width, height, insideMask) {
       const visited = new Uint8Array(width * height);
       const components = [];
       const queue = new Int32Array(width * height);
 
-      const xStart = Math.max(1, paper.x);
-      const yStart = Math.max(1, paper.y);
-      const xEnd = Math.min(width - 2, paper.x + paper.w - 1);
-      const yEnd = Math.min(height - 2, paper.y + paper.h - 1);
+      for (let start = 0; start < width * height; start++) {
+        if (!insideMask[start] || !mask[start] || visited[start]) continue;
 
-      for (let y = yStart; y <= yEnd; y++) {
-        for (let x = xStart; x <= xEnd; x++) {
-          const start = y * width + x;
-          if (!mask[start] || visited[start]) continue;
+        let head = 0;
+        let tail = 0;
+        queue[tail++] = start;
+        visited[start] = 1;
 
-          let head = 0;
-          let tail = 0;
-          queue[tail++] = start;
-          visited[start] = 1;
+        let minX = width, maxX = 0, minY = height, maxY = 0, area = 0;
 
-          let minX = x, maxX = x, minY = y, maxY = y, area = 0;
+        while (head < tail) {
+          const idx = queue[head++];
+          area++;
 
-          while (head < tail) {
-            const idx = queue[head++];
-            area++;
+          const y = Math.floor(idx / width);
+          const x = idx - y * width;
 
-            const cy = Math.floor(idx / width);
-            const cx = idx - cy * width;
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
 
-            if (cx < minX) minX = cx;
-            if (cx > maxX) maxX = cx;
-            if (cy < minY) minY = cy;
-            if (cy > maxY) maxY = cy;
+          const neighbors = [idx - 1, idx + 1, idx - width, idx + width];
 
-            const neighbors = [idx - 1, idx + 1, idx - width, idx + width];
+          for (const n of neighbors) {
+            if (n < 0 || n >= width * height) continue;
+            if (!insideMask[n] || !mask[n] || visited[n]) continue;
 
-            for (const n of neighbors) {
-              const ny = Math.floor(n / width);
-              const nx = n - ny * width;
-
-              if (
-                nx >= xStart && nx <= xEnd &&
-                ny >= yStart && ny <= yEnd &&
-                mask[n] && !visited[n]
-              ) {
-                visited[n] = 1;
-                queue[tail++] = n;
-              }
-            }
+            visited[n] = 1;
+            queue[tail++] = n;
           }
-
-          components.push({
-            x: minX,
-            y: minY,
-            w: maxX - minX + 1,
-            h: maxY - minY + 1,
-            area
-          });
         }
+
+        components.push({
+          x: minX,
+          y: minY,
+          w: maxX - minX + 1,
+          h: maxY - minY + 1,
+          area
+        });
       }
 
       return components;
@@ -339,13 +438,13 @@
       const height = canvas.height;
       const imageData = ctx.getImageData(0, 0, width, height);
 
-      const paper = findPaperRect(imageData, width, height);
-      const { mask, threshold } = getDarkMaskInsidePaper(imageData, width, height, paper);
-      const components = findComponents(mask, width, height, paper);
+      const paper = findPaperQuad(imageData, width, height);
+      const insideMask = makeInsideMask(width, height, paper.poly);
+      const { mask, threshold, paperPixelCount } = getDarkMaskInsidePaper(imageData, width, height, insideMask);
+      const components = findComponents(mask, width, height, insideMask);
 
-      const paperArea = paper.w * paper.h;
-      const minArea = Math.max(5, paperArea * 0.00001);
-      const maxArea = paperArea * 0.005;
+      const minArea = Math.max(5, paperPixelCount * 0.00001);
+      const maxArea = paperPixelCount * 0.005;
 
       const detections = [];
 
@@ -364,10 +463,14 @@
 
       detections.sort((a, b) => (a.y - b.y) || (a.x - b.x));
 
-      // Papierkader tekenen.
+      // Papier-vierhoek tekenen.
       ctx.lineWidth = 4;
       ctx.strokeStyle = '#1a73e8';
-      ctx.strokeRect(paper.x, paper.y, paper.w, paper.h);
+      ctx.beginPath();
+      ctx.moveTo(paper.poly[0].x, paper.poly[0].y);
+      for (let i = 1; i < paper.poly.length; i++) ctx.lineTo(paper.poly[i].x, paper.poly[i].y);
+      ctx.closePath();
+      ctx.stroke();
 
       let total = 0;
       for (const d of detections) {
@@ -376,12 +479,10 @@
         ctx.strokeStyle = d.count > 1 ? '#ff7a00' : '#00a651';
         ctx.fillStyle = d.count > 1 ? '#ff7a00' : '#00a651';
         ctx.strokeRect(d.x, d.y, d.w, d.h);
-        if (d.count > 1) {
-          ctx.fillText(String(d.count), d.x, Math.max(14, d.y - 3));
-        }
+        if (d.count > 1) ctx.fillText(String(d.count), d.x, Math.max(14, d.y - 3));
       }
 
-      return { total, detections, components: components.length, threshold, paper };
+      return { total, detections, threshold, paper };
     }
 
     fileInput.addEventListener('change', async (event) => {
@@ -417,7 +518,7 @@
       resultEl.style.display = 'none';
 
       try {
-        setStatus('Papier zoeken en poppen tellen...');
+        setStatus('Papier-vierhoek zoeken en poppen tellen...');
         await new Promise(resolve => setTimeout(resolve, 50));
 
         const img = await loadImage(selectedFile);
@@ -433,9 +534,9 @@
         downloadButton.disabled = false;
 
         if (result.paper.fallback) {
-          setStatus('Analyse klaar. Let op: papierkader was onzeker, daarom is bijna de hele foto gebruikt.');
+          setStatus('Analyse klaar. Let op: papier-vierhoek was onzeker, daarom is bijna de hele foto gebruikt.');
         } else {
-          setStatus('Analyse klaar. Papierkader gevonden: ' + result.paper.w + '×' + result.paper.h + '.');
+          setStatus('Analyse klaar. Papier-vierhoek gevonden.');
         }
       } catch (err) {
         errorEl.textContent = err.message || 'Analyse mislukt.';

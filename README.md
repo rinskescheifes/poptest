@@ -1,15 +1,12 @@
-# Poptest met papierkader
+# Poptest met papier-vierhoek
 
-Deze versie zoekt eerst het witte papier en telt daarna alleen binnen dat kader.
+Deze versie zoekt het witte papier als vierhoek, zodat schuine foto's beter werken.
 
 Upload naar de hoofdmap van je GitHub repo `poptest`:
 
 - index.html
 - README.md
 
-Daarna GitHub Pages:
-Settings > Pages > Deploy from branch > main > /root > Save
-
-Hard refresh na uploaden:
+Daarna hard refreshen:
 - Windows: Ctrl + Shift + R
 - Mac: Cmd + Shift + R
