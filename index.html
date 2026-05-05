@@ -74,7 +74,7 @@
     <section class="card">
       <h1>Poppen Teller</h1>
       <p class="subtitle">
-        De app zoekt de 4 rechte papierkanten met randdetectie en telt alleen binnen het papier.
+        De app zoekt de 4 rechte papierkanten met randdetectie en maakt het kader extra ruim zodat het papier niet wordt afgesneden.
       </p>
 
       <div class="actions">
@@ -237,9 +237,9 @@
         // Kandidaten worden gescoord op: binnenzijde is lichter dan buitenzijde.
         let best = null;
 
-        const angleRange = 28; // graden scheefstand toegestaan
+        const angleRange = 38; // graden scheefstand toegestaan
         const angleStep = 2;
-        const offsetStep = Math.max(4, Math.round(Math.max(width, height) / 150));
+        const offsetStep = Math.max(3, Math.round(Math.max(width, height) / 220));
 
         for (let deg = -angleRange; deg <= angleRange; deg += angleStep) {
           const rad = deg * Math.PI / 180;
@@ -250,10 +250,10 @@
             dir = { x: Math.cos(rad), y: Math.sin(rad) };
             normal = { x: -dir.y, y: dir.x };
             if (side === 'top') {
-              offsets = { from: -height * 0.48, to: height * 0.15 };
+              offsets = { from: -height * 0.55, to: height * 0.20 };
               sideWanted = 1; // papier onder de lijn
             } else {
-              offsets = { from: -height * 0.15, to: height * 0.48 };
+              offsets = { from: -height * 0.20, to: height * 0.55 };
               sideWanted = -1; // papier boven de lijn
             }
           } else {
@@ -261,10 +261,10 @@
             dir = { x: -Math.sin(rad), y: Math.cos(rad) };
             normal = { x: dir.y, y: -dir.x };
             if (side === 'left') {
-              offsets = { from: -width * 0.48, to: width * 0.15 };
+              offsets = { from: -width * 0.55, to: width * 0.20 };
               sideWanted = 1; // papier rechts van de lijn
             } else {
-              offsets = { from: -width * 0.15, to: width * 0.48 };
+              offsets = { from: -width * 0.20, to: width * 0.55 };
               sideWanted = -1; // papier links van de lijn
             }
           }
@@ -337,13 +337,14 @@
       const area = polygonArea(poly);
       if (area < width * height * 0.12) return fallbackQuad(width, height);
 
-      // Trek heel licht naar binnen zodat de buitenrand niet meetelt.
+      // Maak het kader bewust ruimer. De eerdere versies pakten soms een binnenrand,
+      // waardoor een deel van het papier buiten het blauwe kader viel.
       const pcx = poly.reduce((s, p) => s + p.x, 0) / 4;
       const pcy = poly.reduce((s, p) => s + p.y, 0) / 4;
-      poly = poly.map(p => ({
-        x: pcx + (p.x - pcx) * 0.99,
-        y: pcy + (p.y - pcy) * 0.99
-      }));
+      poly = poly.map(p => clampPoint({
+        x: pcx + (p.x - pcx) * 1.08,
+        y: pcy + (p.y - pcy) * 1.08
+      }, width, height));
 
       return {
         poly,
@@ -360,10 +361,10 @@
     function fallbackQuad(width, height) {
       return {
         poly: [
-          {x: width * 0.03, y: height * 0.03},
-          {x: width * 0.97, y: height * 0.03},
-          {x: width * 0.97, y: height * 0.97},
-          {x: width * 0.03, y: height * 0.97}
+          {x: width * 0.005, y: height * 0.005},
+          {x: width * 0.995, y: height * 0.005},
+          {x: width * 0.995, y: height * 0.995},
+          {x: width * 0.005, y: height * 0.995}
         ],
         fallback: true,
         scores: null

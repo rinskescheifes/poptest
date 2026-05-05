@@ -1,6 +1,6 @@
-# Poptest met echte randdetectie
+# Poptest met ruimer papierkader
 
-Deze versie zoekt per zijde naar de beste rechte papierkant. Daardoor mag het papier scheef staan of als trapezium in beeld komen.
+Deze versie zoekt de vier rechte papierkanten en maakt het gevonden kader daarna extra ruim, zodat niet de helft van het papier wordt gemist.
 
 Upload naar de hoofdmap van repo `poptest`:
 
